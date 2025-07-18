@@ -1,3 +1,43 @@
+/****************************************************************************
+ *
+ * Copyright 2020 PX4 Development Team. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors
+ * may be used to endorse or promote products derived from this software without
+ * specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ ****************************************************************************/
+
+/**
+ * @brief Offboard control example
+ * @file offboard_control.cpp
+ * @addtogroup examples
+ * @author Mickey Cowden <info@cowden.tech>
+ * @author Nuno Marques <nuno.marques@dronesolutions.io>
+ */
+
 #include <stdint.h>
 
 #include <chrono>
@@ -15,7 +55,7 @@ using namespace px4_msgs::msg;
 class OffboardControl : public rclcpp::Node
 {
 public:
-  OffboardControl() : Node("nav_drone_control_node")
+  OffboardControl() : Node("nav_drone_control_srv_node")
   {
     offboard_control_mode_publisher_ =
       this->create_publisher<OffboardControlMode>("/fmu/in/offboard_control_mode", 10);
@@ -25,27 +65,61 @@ public:
       this->create_publisher<VehicleCommand>("/fmu/in/vehicle_command", 10);
 
     offboard_setpoint_counter_ = 0;
+    flight_state_ = FlightState::INIT;
+    hover_start_time_ = std::chrono::steady_clock::now();
 
     auto timer_callback = [this]() -> void {
-      if (offboard_setpoint_counter_ == 30) {
-        // Change to Offboard mode after 10 setpoints
-        this->publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
+      switch (flight_state_) {
+        case FlightState::INIT:
+          if (offboard_setpoint_counter_ == 10) {
+            // Change to Offboard mode after 10 setpoints
+            this->publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
+            // Arm the vehicle
+            this->arm();
+            flight_state_ = FlightState::TAKEOFF;
+            RCLCPP_INFO(this->get_logger(), "切换到起飞模式");
+          }
+          break;
 
-        // Arm the vehicle
-        this->arm();
-      } else if (offboard_setpoint_counter_ == 60) {
-        // Disarm the vehicle after 20 setpoints
-        this->disarm();
+        case FlightState::TAKEOFF:
+          // 继续发送2米高度指令直到稳定
+          if (offboard_setpoint_counter_ > 50) { // 5秒后认为已到达目标高度
+            flight_state_ = FlightState::HOVER;
+            hover_start_time_ = std::chrono::steady_clock::now();
+            RCLCPP_INFO(this->get_logger(), "开始悬停20秒");
+          }
+          break;
+
+        case FlightState::HOVER:
+          {
+            auto current_time = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - hover_start_time_);
+            if (elapsed.count() >= 20) {
+              flight_state_ = FlightState::LANDING;
+              RCLCPP_INFO(this->get_logger(), "开始降落");
+            }
+          }
+          break;
+
+        case FlightState::LANDING:
+          // 降落完成后进入等待状态
+          if (offboard_setpoint_counter_ > 100) { // 简单的降落时间估计
+            flight_state_ = FlightState::WAITING;
+            this->disarm();
+            RCLCPP_INFO(this->get_logger(), "降落完成，进入等待状态");
+          }
+          break;
+
+        case FlightState::WAITING:
+          // 保持等待状态，不执行任何动作
+          return;
       }
 
       // offboard_control_mode needs to be paired with trajectory_setpoint
       publish_offboard_control_mode();
-      // publish_trajectory_setpoint();
+      publish_trajectory_setpoint();
 
-      // stop the counter after reaching 11
-      if (offboard_setpoint_counter_ < 21) {
-        offboard_setpoint_counter_++;
-      }
+      offboard_setpoint_counter_++;
     };
     timer_ = this->create_wall_timer(100ms, timer_callback);
   }
@@ -54,6 +128,14 @@ public:
   void disarm();
 
 private:
+  enum class FlightState {
+    INIT,
+    TAKEOFF,
+    HOVER,
+    LANDING,
+    WAITING
+  };
+
   rclcpp::TimerBase::SharedPtr timer_;
 
   rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
@@ -63,6 +145,8 @@ private:
   std::atomic<uint64_t> timestamp_;  //!< common synced timestamped
 
   uint64_t offboard_setpoint_counter_;  //!< counter for the number of setpoints sent
+  FlightState flight_state_;
+  std::chrono::steady_clock::time_point hover_start_time_;
 
   void publish_offboard_control_mode();
   void publish_trajectory_setpoint();
@@ -107,14 +191,34 @@ void OffboardControl::publish_offboard_control_mode()
 
 /**
  * @brief Publish a trajectory setpoint
- *        For this example, it sends a trajectory setpoint to make the
- *        vehicle hover at 5 meters with a yaw angle of 180 degrees.
+ *        根据飞行状态发送相应的轨迹设定点
  */
 void OffboardControl::publish_trajectory_setpoint()
 {
   TrajectorySetpoint msg{};
-  msg.position = {0.0, 0.0, -5.0};
-  msg.yaw = -3.14;  // [-PI:PI]
+  
+  switch (flight_state_) {
+    case FlightState::INIT:
+    case FlightState::TAKEOFF:
+    case FlightState::HOVER:
+      // 在2米高度悬停
+      msg.position = {0.0, 0.0, -2.0};
+      msg.yaw = 0.0;
+      break;
+      
+    case FlightState::LANDING:
+      // 降落到地面
+      msg.position = {0.0, 0.0, 0.0};
+      msg.yaw = 0.0;
+      break;
+      
+    case FlightState::WAITING:
+      // 保持在地面
+      msg.position = {0.0, 0.0, 0.0};
+      msg.yaw = 0.0;
+      break;
+  }
+  
   msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
   trajectory_setpoint_publisher_->publish(msg);
 }
