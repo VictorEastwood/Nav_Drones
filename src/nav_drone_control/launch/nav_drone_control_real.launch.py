@@ -4,12 +4,6 @@ from launch.actions import ExecuteProcess
 
 def generate_launch_description():
 
-    micro_ros_agent = ExecuteProcess(
-        cmd=[[
-            'micro-ros-agent udp4 --port 8888 -v '
-        ]],
-        shell=True
-    )
     micro_XRCE_agent_serial = ExecuteProcess(
         cmd=[[
             'sudo MicroXRCEAgent serial --dev /dev/ttyTHS1 -b 921600'
@@ -25,8 +19,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        # micro_ros_agent,
-        # micro_XRCE_agent_sim,
         # micro_XRCE_agent_serial,
         nav_drone_control_node
     ])
