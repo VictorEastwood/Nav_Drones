@@ -17,7 +17,7 @@ make px4_sitl gz_x500
 ```bash
 cd ~/Nav_Drones
 source install/local_setup.bash
-ros2 launch sensor_combined_listener.launch.py
+ros2 launch px4_ros_com sensor_combined_listener.launch.py
 ```
 
 启动Nav Drone Control
@@ -39,7 +39,7 @@ sudo MicroXRCEAgent serial --dev /dev/ttyTHS1 -b 921600
 ```bash
 cd ~/Nav_Drones
 source install/local_setup.bash
-ros2 launch sensor_combined_listener.launch.py
+ros2 launch px4_ros_com sensor_combined_listener.launch.py
 ```
 
 启动Nav Drone Control
