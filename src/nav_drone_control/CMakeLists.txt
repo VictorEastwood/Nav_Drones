@@ -25,6 +25,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rclpy REQUIRED)
+find_package(px4_ros_com REQUIRED)
 
 #################
 # Setup targets #
@@ -35,14 +36,18 @@ include_directories(include)
 
 # nav_drone_control_node
 add_executable(nav_drone_control_node src/nav_drone_control.cpp)
-ament_target_dependencies(nav_drone_control_node rclcpp px4_msgs)
+ament_target_dependencies(nav_drone_control_node rclcpp px4_msgs px4_ros_com)
 install(TARGETS nav_drone_control_node DESTINATION lib/${PROJECT_NAME})
 
 # nav_drone_control_srv_node
 add_executable(nav_drone_control_srv_node src/nav_drone_control_srv.cpp)
-ament_target_dependencies(nav_drone_control_srv_node rclcpp px4_msgs)
+ament_target_dependencies(nav_drone_control_srv_node rclcpp px4_msgs px4_ros_com)
 install(TARGETS nav_drone_control_srv_node DESTINATION lib/${PROJECT_NAME})
 
+# # frame_transforms
+# target_link_libraries(nav_drone_control_node
+#   frame_transforms
+# )
 ############
 # Install ##
 ############
